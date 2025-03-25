@@ -2,6 +2,7 @@ package com.example.dicegame.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,11 +14,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.example.dicegame.R
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.random.Random
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -47,9 +52,17 @@ fun GameScreen(navController: NavController) {
     var showTargetDialog by remember { mutableStateOf(true) }
     var tieBreaker by remember { mutableStateOf(false) }
 
-    // Error message for when no dice is selected for rerolling
+    // Error message for when no dice is selected for rerolling or max selection reached
     var errorMessage by remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Tracks if dice should appear in full color (active) or grayscale (inactive)
+    var diceEnabled by remember { mutableStateOf(false) }
+
+    // Tracks if the computer is busy re-rolling (for loading animation)
+    var isComputerRolling by remember { mutableStateOf(false) }
+
+    val coroutineScope = rememberCoroutineScope()
 
     // Determines winner after both turns are complete or during tie-breaker rounds.
     fun determineWinner() {
@@ -63,24 +76,56 @@ fun GameScreen(navController: NavController) {
     // Helper to perform a full roll of 5 dice
     fun rollAllDice(): List<Int> = List(5) { Random.nextInt(1, 7) }
 
-    // Helper to re-roll only dice that are NOT selected
+    // Helper to re-roll only dice that are NOT selected (for human)
     fun rerollDice(currentDice: List<Int>, selected: Set<Int>): List<Int> =
         currentDice.mapIndexed { index, value ->
             if (index in selected) value else Random.nextInt(1, 7)
         }
 
-    // Computer's optional reroll strategy (random selection)
-    fun computerReroll(currentDice: List<Int>): List<Int> {
-        // For each die, randomly decide to keep (true) or re-roll (false)
-        val diceToKeep = List(5) { Random.nextBoolean() }
-        return currentDice.mapIndexed { index, value ->
-            if (diceToKeep[index]) value else Random.nextInt(1, 7)
+    /**
+     * Intelligent computer re-roll strategy.
+     *
+     * This strategy uses the following rules:
+     * - The computer always keeps dice showing 5 or 6 if it is trailing.
+     * - If the computer is trailing and still needs many points (pointsNeeded > 20), it becomes even more aggressive,
+     *   keeping only dice showing 6.
+     * - If the computer is leading, it is more conservative and keeps dice showing 4 or higher.
+     * - The computer's decision is based solely on its current dice values, its current score,
+     *   the human’s score, and the target score.
+     *
+     * Advantages:
+     * - When trailing, re-rolling more dice increases the chance of hitting high values (5s or 6s) to catch up.
+     * - When leading, keeping moderately high dice (4 and above) minimizes risk.
+     *
+     * Disadvantages:
+     * - The strategy is heuristic-based and may not always yield the optimal expected value,
+     *   but it balances risk and reward with relatively low computational cost.
+     */
+    fun intelligentComputerReroll(
+        currentDice: List<Int>,
+        computerScore: Int,
+        humanScore: Int,
+        targetScore: Int
+    ): List<Int> {
+        val pointsNeeded = targetScore - computerScore
+        val isTrailing = computerScore < humanScore
+        val threshold = if (isTrailing) {
+            if (pointsNeeded > 20) 6 else 5  // Aggressive if far behind: only keep 6; otherwise, keep 5 and 6.
+        } else {
+            4  // Conservative when leading: keep dice of value 4 or above.
+        }
+        return currentDice.map { die ->
+            if (die < threshold) Random.nextInt(1, 7) else die
         }
     }
 
     // Handler for the Throw/Re-roll button
     fun onThrow() {
         errorMessage = "" // reset any previous error
+
+        // As soon as the user hits Throw, we enable dice for selection
+        diceEnabled = true
+
         if (!tieBreaker) {
             if (humanRollCount == 0) {
                 // First roll: roll all dice for both players
@@ -89,18 +134,13 @@ fun GameScreen(navController: NavController) {
                 humanRollCount = 1
                 computerRollCount = 1
             } else if (humanRollCount in 1 until 3) {
-                // Before reroll, ensure human selected at least one die to keep.
+                // Before re-roll, ensure human selected at least one die to hold.
                 if (selectedDice.isEmpty()) {
                     errorMessage = "Please select at least one die to hold before re-rolling."
                 } else {
                     // Human re-roll: only re-roll dice that are not selected.
                     humanDice = rerollDice(humanDice, selectedDice)
                     humanRollCount++
-                    // For computer: simulate its optional re-roll if available
-                    if (computerRollCount < 3) {
-                        computerDice = computerReroll(computerDice)
-                        computerRollCount++
-                    }
                     // Clear the selected dice for next optional re-roll (if any)
                     selectedDice = emptySet()
                 }
@@ -112,14 +152,20 @@ fun GameScreen(navController: NavController) {
         }
     }
 
-    // Handler for the Score button – ends current turn and updates overall scores.
-    fun onScore() {
+    // Suspend handler for the Score button – ends current turn and updates overall scores.
+    suspend fun onScore() {
+        // Once the user scores, disable dice (show them in grayscale)
+        diceEnabled = false
+
         if (!tieBreaker) {
-            // If computer still has optional re-rolls, simulate them until computerRollCount == 3.
+            // Simulate computer re-rolls with a loading animation.
+            isComputerRolling = true
             while (computerRollCount < 3) {
-                computerDice = computerReroll(computerDice)
+                computerDice = intelligentComputerReroll(computerDice, computerScore, humanScore, targetScore)
                 computerRollCount++
+                delay(500L) // Delay to simulate re-roll animation
             }
+            isComputerRolling = false
         }
         // Add turn scores (sum of dice)
         humanScore += humanDice.sum()
@@ -129,7 +175,6 @@ fun GameScreen(navController: NavController) {
 
         // Check if win condition is met (only check after both players completed the turn)
         if (humanScore >= targetScore || computerScore >= targetScore) {
-            // If both players had the same number of turns, see if there's a winner or tie.
             if (humanTurnCount == computerTurnCount) {
                 if (humanScore == computerScore) {
                     tieBreaker = true
@@ -137,7 +182,6 @@ fun GameScreen(navController: NavController) {
                     determineWinner()
                 }
             } else {
-                // If turn counts are different, force tie-breaker.
                 tieBreaker = true
             }
         }
@@ -194,148 +238,165 @@ fun GameScreen(navController: NavController) {
         else -> false
     }
 
+    // UI Scaffold
     Scaffold(
         topBar = {
-            // A colored top bar for a more appealing UI
             TopAppBar(
                 title = { Text("Dice Game", color = Color.White) },
                 colors = TopAppBarDefaults.mediumTopAppBarColors(
-                    containerColor = Color(0xFF6200EE) // A purple shade
+                    containerColor = Color(0xFF6200EE)
                 )
             )
         },
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
     ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Top
-        ) {
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Display total wins
-            Text(
-                text = "H: $totalHumanWins  /  C: $totalComputerWins",
-                fontSize = 16.sp,
-                style = MaterialTheme.typography.bodyMedium
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Display current scores
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Top
             ) {
-                Text(text = "Player Score: $humanScore")
-                Spacer(modifier = Modifier.width(16.dp))
-                Text(text = "Computer Score: $computerScore")
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Dice display
-            Text(
-                text = "Player's Dice",
-                fontSize = 20.sp,
-                style = MaterialTheme.typography.titleMedium
-            )
-            DiceRow(
-                diceValues = humanDice,
-                selectedDice = selectedDice,
-                onDiceClick = { index ->
-                    // Only allow selection if within allowed re-roll rounds and not in tie-breaker
-                    if (!tieBreaker && humanRollCount in 1 until 3) {
-                        selectedDice = if (index in selectedDice) {
-                            selectedDice - index
-                        } else {
-                            selectedDice + index
+                Spacer(modifier = Modifier.height(8.dp))
+                // Display total wins
+                Text(
+                    text = "H: $totalHumanWins  /  C: $totalComputerWins",
+                    fontSize = 16.sp,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                // Display current scores
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Text(text = "Player Score: $humanScore")
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(text = "Computer Score: $computerScore")
+                }
+                Spacer(modifier = Modifier.height(24.dp))
+                // Dice display
+                Text(
+                    text = "Player's Dice",
+                    fontSize = 20.sp,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                DiceRow(
+                    diceValues = humanDice,
+                    selectedDice = selectedDice,
+                    onDiceClick = { index ->
+                        if (!tieBreaker && humanRollCount in 1 until 3) {
+                            // Allow unselecting even if 4 dice are already selected.
+                            if (index in selectedDice) {
+                                selectedDice = selectedDice - index
+                            } else {
+                                if (selectedDice.size < 4) {
+                                    selectedDice = selectedDice + index
+                                } else {
+                                    errorMessage = "Maximum of 4 dice can be selected."
+                                }
+                            }
+                        }
+                    },
+                    isDiceEnabled = diceEnabled
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Computer's Dice",
+                    fontSize = 20.sp,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                DiceRow(
+                    diceValues = computerDice,
+                    selectedDice = emptySet(),
+                    onDiceClick = { /* no-op for computer dice */ },
+                    isDiceEnabled = diceEnabled
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                val gameOverNoTie = (humanScore >= targetScore || computerScore >= targetScore) && !tieBreaker
+                if (!gameOverNoTie) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Button(
+                            onClick = { onThrow() },
+                            enabled = isThrowButtonEnabled
+                        ) {
+                            Text(text = throwButtonLabel)
+                        }
+                        // Score button is disabled when the computer is rolling
+                        Button(
+                            onClick = {
+                                coroutineScope.launch { onScore() }
+                            },
+                            enabled = !isComputerRolling
+                        ) {
+                            Text(text = "Score")
                         }
                     }
-                }
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text(
-                text = "Computer's Dice",
-                fontSize = 20.sp,
-                style = MaterialTheme.typography.titleMedium
-            )
-            DiceRow(
-                diceValues = computerDice,
-                selectedDice = emptySet(),
-                onDiceClick = { /* no-op for computer dice */ }
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Determine if game is over (without tie-breaker)
-            val gameOverNoTie = (humanScore >= targetScore || computerScore >= targetScore) && !tieBreaker
-
-            if (!gameOverNoTie) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Button(
-                        onClick = { onThrow() },
-                        enabled = isThrowButtonEnabled
-                    ) {
-                        Text(text = throwButtonLabel)
-                    }
-                    Button(onClick = { onScore() }) {
-                        Text(text = "Score")
-                    }
-                }
-            } else {
-                // Game over UI
-                val winMessage = if (humanScore > computerScore) "You Win! 🎉" else "You Lose! 😢"
-                val messageColor = if (humanScore > computerScore) {
-                    MaterialTheme.colorScheme.primary
                 } else {
-                    MaterialTheme.colorScheme.error
+                    val winMessage = if (humanScore > computerScore) "You Win! 🎉" else "You Lose! 😢"
+                    val messageColor = if (humanScore > computerScore) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    }
+                    Text(text = winMessage, fontSize = 24.sp, color = messageColor)
                 }
-                Text(text = winMessage, fontSize = 24.sp, color = messageColor)
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(onClick = { navController.popBackStack() }) {
+                    Text(text = "Back to Home")
+                }
             }
-
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = { navController.popBackStack() }) {
-                Text(text = "Back to Home")
+            // Loading animation overlay while computer is re-rolling
+            if (isComputerRolling) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0x88000000)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
+                }
             }
         }
     }
 }
 
+/**
+ * Displays a row of dice. Each die can be highlighted if selected and may be displayed in grayscale (disabled).
+ */
 @Composable
 fun DiceRow(
     diceValues: List<Int>,
     selectedDice: Set<Int>,
-    onDiceClick: (Int) -> Unit
+    onDiceClick: (Int) -> Unit,
+    isDiceEnabled: Boolean
 ) {
+    val grayscaleMatrix = ColorMatrix().apply { setToSaturation(0f) }
+    val grayscaleColorFilter = ColorFilter.colorMatrix(grayscaleMatrix)
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Center
     ) {
         diceValues.forEachIndexed { index, value ->
-            // When a die is selected, add a highlighted border.
             val modifier = Modifier
                 .size(64.dp)
                 .padding(4.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .then(
-                    if (index in selectedDice)
+                    if (index in selectedDice && isDiceEnabled)
                         Modifier.border(BorderStroke(3.dp, Color.Green), RoundedCornerShape(8.dp))
                     else Modifier
                 )
-                .clickable { onDiceClick(index) }
-
+                .clickable(enabled = isDiceEnabled) { onDiceClick(index) }
             Image(
                 painter = painterResource(id = getDiceImage(value)),
                 contentDescription = "Dice showing $value",
-                modifier = modifier
+                modifier = modifier,
+                colorFilter = if (!isDiceEnabled) grayscaleColorFilter else null
             )
         }
     }
@@ -352,3 +413,45 @@ fun getDiceImage(value: Int): Int {
         else -> R.drawable.dice_1
     }
 }
+
+/*
+----------------------- Documentation of the Intelligent Computer Strategy -----------------------
+
+Strategy Overview:
+------------------
+The computer’s re-roll strategy is designed to be efficient and risk-aware, considering both its current game state and the target score.
+
+Rules:
+1. When the computer is trailing (its score is less than the human's):
+   - It adopts an aggressive strategy.
+   - It only keeps dice that show high values.
+   - If many points are needed (pointsNeeded > 20), it keeps only dice showing 6.
+   - Otherwise, it keeps dice showing 5 or 6.
+2. When the computer is leading:
+   - It plays conservatively.
+   - It keeps dice showing 4 or above.
+3. The decision is based on:
+   - The computer’s current score.
+   - The human player’s current score.
+   - The target score (which determines how many points are still needed).
+
+Justification:
+--------------
+- By re-rolling lower dice, the computer increases its chance to hit a higher total when trailing.
+- When leading, minimizing risk by keeping moderately high dice (≥ 4) helps maintain its advantage.
+- The strategy factors in the urgency (points needed) to adjust its risk tolerance.
+- This approach is computationally simple yet mathematically grounded in the concept of expected value, balancing risk and reward.
+
+Advantages:
+-----------
+- Adaptive: It changes its behavior based on whether it’s trailing or leading.
+- Efficient: It uses a simple threshold-based approach to decide which dice to keep.
+- Risk-Aware: It increases the chance of catching up when behind by being more aggressive.
+
+Disadvantages:
+--------------
+- Heuristic-Based: While it uses expected value concepts, it is not an exhaustive optimal solution.
+- Limited to 3 Rolls: The strategy works within the constraints of the game (maximum 3 rolls per turn).
+
+-----------------------------------------------------------------------------------------------
+*/
