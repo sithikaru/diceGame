@@ -119,40 +119,6 @@ fun GameScreen(navController: NavController) {
         }
     }
 
-    // Handler for the Throw/Re-roll button
-    fun onThrow() {
-        errorMessage = "" // reset any previous error
-
-        // As soon as the user hits Throw, we enable dice for selection
-        diceEnabled = true
-
-        if (!tieBreaker) {
-            if (humanRollCount == 0) {
-                // First roll: roll all dice for both players
-                humanDice = rollAllDice()
-                computerDice = rollAllDice()
-                humanRollCount = 1
-                computerRollCount = 1
-            } else if (humanRollCount in 1 until 3) {
-                // Before re-roll, ensure human selected at least one die to hold.
-                if (selectedDice.isEmpty()) {
-                    errorMessage = "Please select at least one die to hold before re-rolling."
-                } else {
-                    // Human re-roll: only re-roll dice that are not selected.
-                    humanDice = rerollDice(humanDice, selectedDice)
-                    humanRollCount++
-                    // Clear the selected dice for next optional re-roll (if any)
-                    selectedDice = emptySet()
-                }
-            }
-        } else {
-            // Tie-breaker: always roll all dice
-            humanDice = rollAllDice()
-            computerDice = rollAllDice()
-        }
-    }
-
-    // Suspend handler for the Score button – ends current turn and updates overall scores.
     suspend fun onScore() {
         // Once the user scores, disable dice (show them in grayscale)
         diceEnabled = false
@@ -191,6 +157,45 @@ fun GameScreen(navController: NavController) {
         computerRollCount = 0
         selectedDice = emptySet()
     }
+
+    // Handler for the Throw/Re-roll button
+    fun onThrow() {
+        errorMessage = "" // reset any previous error
+
+        // As soon as the user hits Throw, we enable dice for selection
+        diceEnabled = true
+
+        if (!tieBreaker) {
+            if (humanRollCount == 0) {
+                // First roll: roll all dice for both players
+                humanDice = rollAllDice()
+                computerDice = rollAllDice()
+                humanRollCount = 1
+                computerRollCount = 1
+            } else if (humanRollCount in 1 until 3) {
+                // Before re-roll, ensure human selected at least one die to hold.
+                if (selectedDice.isEmpty()) {
+                    errorMessage = "Please select at least one die to hold before re-rolling."
+                } else {
+                    // Human re-roll: only re-roll dice that are not selected.
+                    humanDice = rerollDice(humanDice, selectedDice)
+                    humanRollCount++
+                    // Clear the selected dice for next optional re-roll (if any)
+                    selectedDice = emptySet()
+
+                    // AUTO-SCORE: If maximum (3 rolls) reached, automatically update score.
+                    if (humanRollCount == 3) {
+                        coroutineScope.launch { onScore() }
+                    }
+                }
+            }
+        } else {
+            // Tie-breaker: always roll all dice
+            humanDice = rollAllDice()
+            computerDice = rollAllDice()
+        }
+    }
+
 
     // Display a Snackbar for any error messages.
     LaunchedEffect(errorMessage) {
@@ -237,6 +242,7 @@ fun GameScreen(navController: NavController) {
         humanRollCount < 3 -> true
         else -> false
     }
+
 
     // UI Scaffold
     Scaffold(
@@ -455,3 +461,4 @@ Disadvantages:
 
 -----------------------------------------------------------------------------------------------
 */
+
