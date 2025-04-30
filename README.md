@@ -1,4 +1,3 @@
-```markdown
 # Dice Game (Android)
 
 A turn-based dice game Android app featuring a customizable target score, multiple rolls per turn, and an AI opponent powered by a simple heuristic strategy. Built with Kotlin and Jetpack Compose.
