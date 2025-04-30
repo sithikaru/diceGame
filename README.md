@@ -10,8 +10,7 @@ A turn-based dice game Android app featuring a customizable target score, multip
 - [Screenshots](#screenshots)  
 - [Getting Started](#getting-started)  
   - [Prerequisites](#prerequisites)  
-  - [Installation](#installation)  
-- [How to Play](#how-to-play)  
+  - [Installation](#installation)
 - [Architecture & Tech Stack](#architecture--tech-stack)  
 - [AI Opponent](#ai-opponent)  
 - [License](#license)  
@@ -59,17 +58,6 @@ A turn-based dice game Android app featuring a customizable target score, multip
 3. **Build & Run**  
    - Select an emulator or USB-connected device.  
    - Click **Run ▶️** or use the **Shift+F10** shortcut.
-
----
-
-## How to Play
-
-1. Launch the app, set your desired **Target Score**.  
-2. Tap **Start Game**.  
-3. On your turn, press **Roll** (up to 3 times).  
-4. After each roll, tap dice to **keep** or **release** them.  
-5. Tap **End Turn** to lock in your score for that turn.  
-6. Reach or exceed the target score to win — watch out for tie-breaker logic!  
 
 ---
 
